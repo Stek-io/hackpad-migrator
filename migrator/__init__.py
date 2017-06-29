@@ -24,7 +24,6 @@ def import_pads(job):
     account_id = get_account_id(db, job['email'])
     new_account = False
     if not account_id:
-        print('Creating new account...')
         account_id = create_new_account(db, job['email'])
         new_account = True
 
@@ -52,16 +51,32 @@ def get_account_id(db, email, domain_id=1):
         return r['id']
     return None
 
+
 def create_new_account(db, email, domain_id=1):
     """ Create a new hackpad pro_accounts with this email for the specified domain_id """
-    pass
+    print('Creating new account...')
+    try:
+        cursor = db.cursor()
+
+        query = """INSERT INTO pro_accounts (id, domainId, fullName, email, passwordHash, 
+        createdDate, lastLoginDate, isAdmin, tempPassHash, isDeleted, fbid, 
+        deletedDate) VALUES (NULL, %s, %s, %s,
+        NULL, NOW(), NOW(), 0, NULL, 0, NULL, NULL);"""
+        query_args = (domain_id, email.split('@')[0], email)
+
+        cursor.execute(query, query_args)
+        db.commit()
+    except mysql.connector.Error as err:
+        print("Failed inserting records to Hackpad: {}".format(err))
+        
+    return cursor.lastrowid
 
 
 def get_account_api_token(db, account_id, token_type=4):
     """ Generate a hackpad API token and insert it in the pro_token table 
     (if it doesn't exist yet) and return it.
     """
-    pass
+    print(account_id)
 
 
 def get_client_id(account_id):
@@ -135,10 +150,10 @@ def mysql_select_one(conn, query, query_args=None):
     :return: Result
     """
     # Return first row of result object
-    cur = conn.cursor(dictionary=True)
-    cur.execute(query, query_args)
-    row = cur.fetchone()
-    cur.close()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute(query, query_args)
+    row = cursor.fetchone()
+    cursor.close()
     return row
 
 
