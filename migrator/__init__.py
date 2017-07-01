@@ -4,7 +4,10 @@ This module imports hackpad.com exported pads into another hackpad instance (lik
 
 import os
 import mysql.connector
-
+import random
+import string
+import re
+from hackpad_api.hackpad import Hackpad
 
 def process_next_job():
     """ Read job from Redis, return location of files and email address """    
@@ -34,11 +37,11 @@ def import_pads(job):
     client_id = get_client_id(account_id)
         
     # Create a new hackpad for each HTML file
-    pads_created = create_pads_from_files(job['file_dir'], client_id, client_secret)
+    pads_created, pads_skipped = create_pads_from_files(job['file_dir'], client_id, client_secret)
 
     # All is good: email the customer the job is done + credentials (in case it is a new account)
-    if pads_created:
-        email_account(job['email'], new_account, account_id, pads_created)
+    if pads_created + pads_skipped:
+        email_account(job['email'], new_account, account_id, pads_created, pads_skipped)
     
     
 def get_account_id(db, email, domain_id=1):
@@ -73,70 +76,109 @@ def create_new_account(db, email, domain_id=1):
 
 
 def get_account_api_token(db, account_id, token_type=4):
-    """ Generate a hackpad API token and insert it in the pro_token table 
+    """ Generate a hackpad API token and insert it in the pro_tokens table 
     (if it doesn't exist yet) and return it.
     """
-    print(account_id)
+    query = "SELECT token FROM pro_tokens WHERE userId=%s AND tokenType=%s"
+    r = mysql_select_one(db, query, (account_id, token_type))
+    if r:
+        if isinstance(r['token'], bytearray): # this db field is binary
+            return r['token'].decode()        
+        return r['token']
+    
+    print('Creating new token...')
+    try:
+        cursor = db.cursor()
+
+        # Generate token: https://stackoverflow.com/a/23728630/562267
+        token = ''.join(random.SystemRandom().choice(string.ascii_letters + string.digits) for _ in range(32))
+        
+        query = """INSERT INTO pro_tokens (userId, tokenType, expirationDate, token, tokenExtra) 
+        VALUES (%s, %s, NULL, %s, NULL);"""
+        query_args = (account_id, token_type, token)
+
+        cursor.execute(query, query_args)
+        db.commit()
+    except mysql.connector.Error as err:
+        print("Failed inserting token to Hackpad: {}".format(err))
+
+    return token
 
 
 def get_client_id(account_id):
     """ Do a lookup to get the client_id for account with account_id """
-    pass
-
+    account_id_encryption_key = os.environ.get('HACKPAD_ACCOUNT_ID_KEY') or '0123456789abcdef' # default used for local testing
+    client_ids_path = os.environ.get('HACKPAD_CLIENT_IDS_PATH') or './client_ids/' # default used for local testing
+    for line in open(client_ids_path + account_id_encryption_key, 'r'):
+        id, client_id = line.split(' ')
+        if str(account_id) == id:
+            return client_id.strip()
+    return False # trigger error @@@@@@@@@@@@
+    
 
 def create_pads_from_files(directory, client_id, client_secret):
     """ For each HTML file in directory, create a new pad, return the number of
     created pads
     """
-    files = os.listdir(directory)
-    pads_created = 0
+    hackpad = Hackpad(api_domain = os.getenv('HACKPAD_API_DOMAIN') or 'hackpad.dev',
+                      sub_domain = os.getenv('HACKPAD_SUB_DOMAIN') or '',
+                      consumer_key = client_id,
+                      consumer_secret = client_secret)
 
-    return 0 # @@@@@@@@@@@@@@@@
+    files = os.listdir(directory)
+    pads_created = pads_skipped = 0
     
     for file in files:
-        print(file)
         fh = open(directory + '/' + file)
-        insert_pad_from_file(fh, client_id, client_secret)
-        pads_created += 1
+        if insert_pad_from_file(hackpad, fh, client_id, client_secret):
+            pads_created += 1
+        else:
+            pads_skipped += 1
     # Check if all files are imported
-    if pads_created != len(files):
+    if pads_created + pads_skipped != len(files):
         print('err')
         # log an error and abort?
-    return pads_created
+    return pads_created, pads_skipped
 
 
-def insert_pad_from_file(fh, client_id, client_secret):
+def insert_pad_from_file(hackpad, fh, client_id, client_secret):
     """ Check the file contents, and create a pad via the hackpad API """
-    for line in fh:
-        print(line)
-    print('-'*79)
-    
+    html = fh.read().replace('\n', '')
+    if html == '<body><h1>Untitled</h1><p></p><p>This pad text is synchronized as you type, so that everyone viewing this page sees the same text.&nbsp; This allows you to collaborate seamlessly on documents!</p><p></p><p></p></body>':
+        return False # default pad
+    html = re.sub(r'^.*?<body', '<html><body', html) # remove all stuff before first <body> tag
+    # get the title
+    m = re.search('<h1.*?>(.+?)</h1>', html)
+    title = m.group(1)
+    new_pad = hackpad.create_hackpad(title, html, '', 'text/html')
+    print('Created pad: %s' % new_pad['globalPadId'])
+    return True
     # If file contains images, copy the images to our own S3 repo
     # @@@@@@@@@@@@@@@@
 
 
-def email_account(email, new_account, account_id, pads_created):
+def email_account(email, new_account, account_id, pads_created, pads_skipped):
     """  Email the account that the import was completed and (if new_account) 
     provide the login credentials.
     """
-    pass
+    print(email, new_account, account_id, pads_created, pads_skipped)
 
 
 def mysql_connect():
     # Connect old skool to the DB    
-    stek_db_host = os.environ.get('STEK_MYSQL_HOST') or '127.0.0.1'
-    stek_db_port = os.environ.get('STEK_MYSQL_PORT') or '3306'
-    stek_db_user = os.environ.get('STEK_MYSQL_USER') or 'root'
-    stek_db_pass = os.environ.get('STEK_MYSQL_PASSWD') or ''
-    stek_db_name = os.environ.get('STEK_MYSQL_DB') or 'hackpad_dev'
-    stek_db_charset = os.environ.get('STEK_MYSQL_ENCODING') or 'utf8'
+    hackpad_db_host = os.environ.get('HACKPAD_MYSQL_HOST') or '127.0.0.1'
+    hackpad_db_port = os.environ.get('HACKPAD_MYSQL_PORT') or '3306'
+    hackpad_db_user = os.environ.get('HACKPAD_MYSQL_USER') or 'root'
+    hackpad_db_pass = os.environ.get('HACKPAD_MYSQL_PASSWD') or ''
+    hackpad_db_name = os.environ.get('HACKPAD_MYSQL_DB') or 'hackpad_dev'
+    hackpad_db_charset = os.environ.get('HACKPAD_MYSQL_ENCODING') or 'utf8'
 
-    conn = mysql.connector.connect(host=stek_db_host,
-                                   port=stek_db_port,
-                                   user=stek_db_user,
-                                   passwd=stek_db_pass,
-                                   database=stek_db_name,
-                                   charset=stek_db_charset)
+    conn = mysql.connector.connect(host=hackpad_db_host,
+                                   port=hackpad_db_port,
+                                   user=hackpad_db_user,
+                                   passwd=hackpad_db_pass,
+                                   database=hackpad_db_name,
+                                   charset=hackpad_db_charset)
     return conn
 
 
@@ -157,9 +199,10 @@ def mysql_select_one(conn, query, query_args=None):
     return row
 
 
+
 if __name__ == '__main__':
     job = {
-        'email': 'mark-local2@pors.net',
-        'file_dir': './data/hackpad.com.vEbKUwI4h4b.3nmKHa5CmC'
+        'email': 'mark-local@pors.net',
+        'file_dir': './data/sherlock.hackpad.com.zxpc7WkEDkm.WiONyRJ5cG'
     }
     import_pads(job)
