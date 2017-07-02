@@ -7,6 +7,7 @@ import mysql.connector
 import random
 import string
 import re
+import html
 from hackpad_api.hackpad import Hackpad
 
 def process_next_job():
@@ -128,9 +129,12 @@ def create_pads_from_files(directory, client_id, client_secret):
     files = os.listdir(directory)
     pads_created = pads_skipped = 0
     
-    for file in files:
-        fh = open(directory + '/' + file)
-        if insert_pad_from_file(hackpad, fh, client_id, client_secret):
+    for file_name in files:
+        fh = open(directory + '/' + file_name)
+
+        print('importing %s' % file_name)
+        
+        if insert_pad_from_file(hackpad, fh, file_name, client_id, client_secret):
             pads_created += 1
         else:
             pads_skipped += 1
@@ -141,21 +145,32 @@ def create_pads_from_files(directory, client_id, client_secret):
     return pads_created, pads_skipped
 
 
-def insert_pad_from_file(hackpad, fh, client_id, client_secret):
+def insert_pad_from_file(hackpad, fh, file_name, client_id, client_secret):
     """ Check the file contents, and create a pad via the hackpad API """
-    html = fh.read().replace('\n', '')
-    if html == '<body><h1>Untitled</h1><p></p><p>This pad text is synchronized as you type, so that everyone viewing this page sees the same text.&nbsp; This allows you to collaborate seamlessly on documents!</p><p></p><p></p></body>':
+    html_pad = fh.read().replace('\n', '')
+    if html_pad == '<body><h1>Untitled</h1><p></p><p>This pad text is synchronized as you type, so that everyone viewing this page sees the same text.&nbsp; This allows you to collaborate seamlessly on documents!</p><p></p><p></p></body>':
         return False # default pad
-    html = re.sub(r'^.*?<body', '<html><body', html) # remove all stuff before first <body> tag
-    # get the title
-    m = re.search('<h1.*?>(.+?)</h1>', html)
-    title = m.group(1)
-    new_pad = hackpad.create_hackpad(title, html, '', 'text/html')
-    print('Created pad: %s' % new_pad['globalPadId'])
-    return True
+    html_pad = re.sub(r'^.*?<body', '<html><body', html_pad) # remove all stuff before first <body> tag
+
     # If file contains images, copy the images to our own S3 repo
     # @@@@@@@@@@@@@@@@
-
+    
+    # get the title
+    m = re.search('<h1.*?>(.+?)</h1>', html_pad)
+    if m:
+        title = re.sub('<[^<]+?>', '', m.group(1)) # strip html tags
+        title = html.unescape(title).strip() # remove html encoded chars and whitespace around string
+    else:
+        # use the filename as the title
+        title = file_name.replace('-', ' ').rstrip('.html').strip()
+    new_pad = hackpad.create_hackpad(title, html_pad, '', 'text/html')
+    if new_pad and 'globalPadId' in new_pad:
+        print('Created pad: %s' % new_pad['globalPadId'])
+        return True
+    else:
+        # log an error and mention in summary email? @@@@@@@@@@@@@@
+        print("Could not create pad %s" % file_name)
+        return False
 
 def email_account(email, new_account, account_id, pads_created, pads_skipped):
     """  Email the account that the import was completed and (if new_account) 
@@ -203,6 +218,6 @@ def mysql_select_one(conn, query, query_args=None):
 if __name__ == '__main__':
     job = {
         'email': 'mark-local@pors.net',
-        'file_dir': './data/sherlock.hackpad.com.zxpc7WkEDkm.WiONyRJ5cG'
+        'file_dir': './data/handpicked.hackpad.com.tz4vKPzuePB.yN4qm8o9SH'
     }
     import_pads(job)
