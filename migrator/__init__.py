@@ -4,18 +4,61 @@ This module imports hackpad.com exported pads into another hackpad instance (lik
 
 import os
 import mysql.connector
+import redis
 import random
 import string
 import re
+import time
 import html
+import json
+import gevent
 from hackpad_api.hackpad import Hackpad
+from gevent import monkey
+monkey.patch_all()
+
+
+EMULATE_INSERTS_DELAY = 2 # real inserts when 0, otherwise delay per fake insert in seconds
+
+# TODO
+# unzip files
+# use from field to create name (smart variations)
+# create error, done, active queues
+# stop the whole thing on error
+
 
 def process_next_job():
-    """ Read job from Redis, return location of files and email address """    
+    """ Read job from Redis, return location of files and email address """
+    hackpad_rdb_host = os.environ.get('HACKPAD_REDIS_HOST') or '127.0.0.1'
+    hackpad_rdb_port = os.environ.get('HACKPAD_REDIS_PORT') or '6379'
+    hackpad_rdb_db = os.environ.get('HACKPAD_REDIS_DB') or 0
 
-    job = {}
+    hackpad_max_concurrent_jobs = os.environ.get('HACKPAD_MAX_CONCURRENT_JOBS') or 2
+    active_jobs = 0
+    
+    rdb = redis.StrictRedis(host=hackpad_rdb_host, port=hackpad_rdb_port, db=hackpad_rdb_db)
 
-    import_pads(job)
+    if EMULATE_INSERTS_DELAY > 0:
+        rdb.lpush('hackpad_imports', json.dumps({
+            'email_address': 'job1@example.com',
+            'attachment': './data/sherlock.hackpad.com.zxpc7WkEDkm.WiONyRJ5cG'
+        }))
+        rdb.lpush('hackpad_imports', json.dumps({
+            'email_address': 'job2@example.com',
+            'attachment': './data/handpicked.hackpad.com.tz4vKPzuePB.yN4qm8o9SH'
+        }))
+        rdb.lpush('hackpad_imports', json.dumps({
+            'email_address': 'job3@example.com',
+            'attachment': './data/hackpad.com.vEbKUwI4h4b.3nmKHa5CmC'
+        }))
+
+    pool = gevent.pool.Pool(hackpad_max_concurrent_jobs)
+
+    while True:
+        job = rdb.brpop('hackpad_imports')
+        job = json.loads(job[1].decode('utf-8'))
+
+        pool.spawn(import_pads, job)
+
 
 
 def import_pads(job):
@@ -25,10 +68,10 @@ def import_pads(job):
     db = mysql_connect()
     
     # If email has no account for domain #1 yet, create one in the hackpad DB
-    account_id = get_account_id(db, job['email'])
+    account_id = get_account_id(db, job['email_address'])
     new_account = False
     if not account_id:
-        account_id = create_new_account(db, job['email'])
+        account_id = create_new_account(db, job['email_address'])
         new_account = True
 
     # Get API token for account
@@ -38,12 +81,13 @@ def import_pads(job):
     client_id = get_client_id(account_id)
         
     # Create a new hackpad for each HTML file
-    pads_created, pads_skipped = create_pads_from_files(job['file_dir'], client_id, client_secret)
+    pads_created, pads_skipped = create_pads_from_files(job['attachment'], job['email_address'], client_id, client_secret)
 
     # All is good: email the customer the job is done + credentials (in case it is a new account)
     if pads_created + pads_skipped:
-        email_account(job['email'], new_account, account_id, pads_created, pads_skipped)
-    
+        email_account(job['email_address'], new_account, account_id, pads_created, pads_skipped)
+
+    return True
     
 def get_account_id(db, email, domain_id=1):
     """ Check if the current email is already a hackpad pro_accounts for the 
@@ -117,7 +161,7 @@ def get_client_id(account_id):
     return False # trigger error @@@@@@@@@@@@
     
 
-def create_pads_from_files(directory, client_id, client_secret):
+def create_pads_from_files(directory, email, client_id, client_secret):
     """ For each HTML file in directory, create a new pad, return the number of
     created pads
     """
@@ -132,12 +176,13 @@ def create_pads_from_files(directory, client_id, client_secret):
     for file_name in files:
         fh = open(directory + '/' + file_name)
 
-        print('importing %s' % file_name)
+        print('importing for %s: %s' % (email, file_name))
         
         if insert_pad_from_file(hackpad, fh, file_name, client_id, client_secret):
             pads_created += 1
         else:
             pads_skipped += 1
+        fh.close()
     # Check if all files are imported
     if pads_created + pads_skipped != len(files):
         print('err')
@@ -163,14 +208,19 @@ def insert_pad_from_file(hackpad, fh, file_name, client_id, client_secret):
     else:
         # use the filename as the title
         title = file_name.replace('-', ' ').rstrip('.html').strip()
-    new_pad = hackpad.create_hackpad(title, html_pad, '', 'text/html')
-    if new_pad and 'globalPadId' in new_pad:
-        print('Created pad: %s' % new_pad['globalPadId'])
-        return True
-    else:
-        # log an error and mention in summary email? @@@@@@@@@@@@@@
-        print("Could not create pad %s" % file_name)
-        return False
+
+    if EMULATE_INSERTS_DELAY:
+        print('Fake create, sleeping for %s seconds...' % EMULATE_INSERTS_DELAY)
+        time.sleep(EMULATE_INSERTS_DELAY)
+    else: # real insert
+        new_pad = hackpad.create_hackpad(title, html_pad, '', 'text/html')
+        if new_pad and 'globalPadId' in new_pad:
+            print('Created pad: %s' % new_pad['globalPadId'])
+            return True
+        else:
+            # log an error and mention in summary email? @@@@@@@@@@@@@@
+            print("Could not create pad %s" % file_name)
+            return False
 
 def email_account(email, new_account, account_id, pads_created, pads_skipped):
     """  Email the account that the import was completed and (if new_account) 
@@ -216,8 +266,4 @@ def mysql_select_one(conn, query, query_args=None):
 
 
 if __name__ == '__main__':
-    job = {
-        'email': 'mark-local@pors.net',
-        'file_dir': './data/handpicked.hackpad.com.tz4vKPzuePB.yN4qm8o9SH'
-    }
-    import_pads(job)
+    process_next_job()
