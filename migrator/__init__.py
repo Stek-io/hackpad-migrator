@@ -9,47 +9,56 @@ import random
 import string
 import re
 import time
+import magic
 import html
 import json
 import gevent
+import zipfile
 from hackpad_api.hackpad import Hackpad
 from image_uploader import replace_image
 from gevent import monkey
 monkey.patch_all()
 
 
-EMULATE_INSERTS_DELAY = 0.1 # real inserts when 0, otherwise delay per fake insert in seconds
+EMULATE_INSERTS_DELAY = 1 # real inserts when 0, otherwise delay per fake insert in seconds
 
 # TODO
-# unzip files
-# use from field to create name (smart variations)
 # create error, done, active queues
 # stop the whole thing on error
+# email confirmation to user
 
 
 def process_next_job():
     """ Read job from Redis, return location of files and email address """
     hackpad_rdb_host = os.environ.get('HACKPAD_REDIS_HOST') or '127.0.0.1'
     hackpad_rdb_port = os.environ.get('HACKPAD_REDIS_PORT') or '6379'
-    hackpad_rdb_db = os.environ.get('HACKPAD_REDIS_DB') or 0
+    hackpad_rdb_db = os.environ.get('HACKPAD_REDIS_DB') or 9
 
-    hackpad_max_concurrent_jobs = os.environ.get('HACKPAD_MAX_CONCURRENT_JOBS') or 2
+    hackpad_max_concurrent_jobs = os.environ.get('HACKPAD_MAX_CONCURRENT_JOBS') or 4
     active_jobs = 0
     
     rdb = redis.StrictRedis(host=hackpad_rdb_host, port=hackpad_rdb_port, db=hackpad_rdb_db)
 
     if EMULATE_INSERTS_DELAY > 0:
         rdb.lpush('hackpad_imports', json.dumps({
-            'email_address': 'job1@example.com',
-            'attachment': './data/sherlock.hackpad.com.zxpc7WkEDkm.WiONyRJ5cG'
+            'from': 'Job1 One <job1@example.com>',
+            'email_address': 'njob1@example.com',
+            'attachment': './attachment/sherlock.hackpad.com.zxpc7WkEDkm.WiONyRJ5cG.zip'
         }))
         rdb.lpush('hackpad_imports', json.dumps({
-            'email_address': 'job2@example.com',
-            'attachment': './data/handpicked.hackpad.com.tz4vKPzuePB.yN4qm8o9SH'
+            'from': 'Job2 Two <job2@example.com>',
+            'email_address': 'njob2@example.com',
+            'attachment': './attachment/handpicked.hackpad.com.tz4vKPzuePB.yN4qm8o9SH.zip'
         }))
         rdb.lpush('hackpad_imports', json.dumps({
-            'email_address': 'job3@example.com',
-            'attachment': './data/hackpad.com.vEbKUwI4h4b.3nmKHa5CmC'
+            'from': 'Three, Job3 <job3@example.com>',
+            'email_address': 'njob3@example.com',
+            'attachment': './attachment/hackpad.com.vEbKUwI4h4b.3nmKHa5CmC.zip'
+        }))
+        rdb.lpush('hackpad_imports', json.dumps({
+            'from': 'Job4 <job4@example.com>',
+            'email_address': 'njob4@example.com',
+            'attachment': './attachment/hackpad.com.pxb3L0YOxil.neEUiOgdr2.zip'
         }))
 
     pool = gevent.pool.Pool(hackpad_max_concurrent_jobs)
@@ -72,7 +81,7 @@ def import_pads(job):
     account_id = get_account_id(db, job['email_address'])
     new_account = False
     if not account_id:
-        account_id = create_new_account(db, job['email_address'])
+        account_id = create_new_account(db, job['email_address'], job['from'])
         new_account = True
 
     # Get API token for account
@@ -101,17 +110,19 @@ def get_account_id(db, email, domain_id=1):
     return None
 
 
-def create_new_account(db, email, domain_id=1):
+def create_new_account(db, email, the_from, domain_id=1):
     """ Create a new hackpad pro_accounts with this email for the specified domain_id """
     print('Creating new account...')
     try:
         cursor = db.cursor()
 
+        full_name = from_to_name(the_from, email)
+        
         query = """INSERT INTO pro_accounts (id, domainId, fullName, email, passwordHash, 
         createdDate, lastLoginDate, isAdmin, tempPassHash, isDeleted, fbid, 
         deletedDate) VALUES (NULL, %s, %s, %s,
         NULL, NOW(), NOW(), 0, NULL, 0, NULL, NULL);"""
-        query_args = (domain_id, email.split('@')[0], email)
+        query_args = (domain_id, full_name, email)
 
         cursor.execute(query, query_args)
         db.commit()
@@ -162,20 +173,32 @@ def get_client_id(account_id):
     return False # trigger error @@@@@@@@@@@@
     
 
-def create_pads_from_files(directory, email, client_id, client_secret):
-    """ For each HTML file in directory, create a new pad, return the number of
+def create_pads_from_files(attachment, email, client_id, client_secret):
+    """ For each HTML file in zipped attachment, create a new pad, return the number of
     created pads
     """
+    print("Opening attached zip %s." % attachment)
+    m = re.search('^.+attachment/(.+)\.zip$', attachment)
+    directory = './data/' + m.group(1)
+    unzip_attachment(attachment, directory)
+    files = os.listdir(directory)
+    
     hackpad = Hackpad(api_domain = os.getenv('HACKPAD_API_DOMAIN') or 'hackpad.dev',
                       sub_domain = os.getenv('HACKPAD_SUB_DOMAIN') or '',
                       consumer_key = client_id,
                       consumer_secret = client_secret)
 
-    files = os.listdir(directory)
     pads_created = pads_skipped = 0
-    
+
     for file_name in files:
-        fh = open(directory + '/' + file_name)
+        file_path = directory + '/' + file_name
+        # check if it is really an html file
+        file_type = magic.from_file(file_path, mime=True)
+        if file_type != 'text/html':
+            print('Invalid file type for file %s :%s' % (file_path, file_type))
+            continue 
+        
+        fh = open(file_path)
 
         print('importing for %s: %s' % (email, file_name))
         
@@ -228,6 +251,28 @@ def email_account(email, new_account, account_id, pads_created, pads_skipped):
     provide the login credentials.
     """
     print(email, new_account, account_id, pads_created, pads_skipped)
+
+
+def unzip_attachment(zipped_attachment, target_dir):
+    """ Unzip attachment into the data directory """
+    zip_ref = zipfile.ZipFile(zipped_attachment, 'r')
+    zip_ref.extractall(target_dir)
+    zip_ref.close()
+
+def from_to_name(the_from, email):
+    """" Convert the from field of the email sender to a full name if possible """
+    # First remove email and spacing
+    the_from = re.sub('<.+>', '', the_from).strip()
+
+    if not the_from:
+        return email.split('@')[0]
+    
+    # If there is a comma, assume swapped first/last
+    if ',' in the_from:
+        parts = the_from.split(',')
+        return parts[-1].strip() + ' ' + ' '.join(parts[:-1]).strip()
+    
+    return the_from
 
 
 def mysql_connect():
