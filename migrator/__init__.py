@@ -13,11 +13,12 @@ import html
 import json
 import gevent
 from hackpad_api.hackpad import Hackpad
+from image_uploader import replace_image
 from gevent import monkey
 monkey.patch_all()
 
 
-EMULATE_INSERTS_DELAY = 2 # real inserts when 0, otherwise delay per fake insert in seconds
+EMULATE_INSERTS_DELAY = 0.1 # real inserts when 0, otherwise delay per fake insert in seconds
 
 # TODO
 # unzip files
@@ -198,7 +199,7 @@ def insert_pad_from_file(hackpad, fh, file_name, client_id, client_secret):
     html_pad = re.sub(r'^.*?<body', '<html><body', html_pad) # remove all stuff before first <body> tag
 
     # If file contains images, copy the images to our own S3 repo
-    # @@@@@@@@@@@@@@@@
+    html_pad = replace_image(html_pad, 'stekpad')
     
     # get the title
     m = re.search('<h1.*?>(.+?)</h1>', html_pad)

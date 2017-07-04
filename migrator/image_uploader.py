@@ -16,8 +16,13 @@ def replace_image(html, bucket_name, http_scheme='https'):
     # run loop for all images in the html
     # Upload images in our bucket and replace image src
     for image in soup.findAll('img'):
-        image_src = image['src']
+        image_src = image['src'].strip()
 
+        if not image_src.startswith('https://hackpad-attachments.s3.amazonaws.com/'):
+            continue
+        
+        print("Processing image %s" % image_src)
+        
         #get image mime_type
         mime_type_info = mimetypes.guess_type(image_src)
         mime_type = mime_type_info[0] if mime_type_info[0] else 'image/jpeg'
@@ -59,7 +64,9 @@ def replace_image(html, bucket_name, http_scheme='https'):
         # replace the src of the image with the new uploaded location
         image['src'] = http_scheme+'://s3.eu-central-1.amazonaws.com/'+bucket_name+'/'+image_name[-1]
 
-    return soup
+        print("Replaced with %s", image['src'])
+        
+    return str(soup)
 
 
 if __name__ == '__main__':

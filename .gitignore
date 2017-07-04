@@ -6,3 +6,4 @@ data
 ve
 *.jar
 .idea
+__pycache__
