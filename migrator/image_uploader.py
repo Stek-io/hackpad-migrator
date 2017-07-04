@@ -7,8 +7,6 @@ from PIL import Image
 import io
 from bs4 import BeautifulSoup
 
-bucket_name = 'stekpad'
-
 s3 = boto3.resource('s3', config=Config(signature_version='s3v4'))
 
 def replace_image(html, bucket_name, http_scheme='https'):
@@ -50,15 +48,22 @@ def replace_image(html, bucket_name, http_scheme='https'):
                 print(error.read())
                 break
 
-            # stream file in binary mode
-            imgByteArr = io.BytesIO()
-            img.save(imgByteArr, format='PNG')
-            imgByteArr = imgByteArr.getvalue()
-
-            # upload image to our bucket
-            s3.Bucket(bucket_name).put_object(Key=image_name[-1], Body=imgByteArr, ACL='public-read', ContentType=mime_type, CacheControl=cache_control,Expires=expires)
-
-            # replace the src of the image with the new uploaded location
-            image['src'] = http_scheme+'://s3.eu-central-1.amazonaws.com/'+bucket_name+'/'+image_name[-1]
+        # stream file in binary mode
+        imgByteArr = io.BytesIO()
+        img.save(imgByteArr, format='PNG')
+        imgByteArr = imgByteArr.getvalue()
+        
+        # upload image to our bucket
+        s3.Bucket(bucket_name).put_object(Key=image_name[-1], Body=imgByteArr, ACL='public-read', ContentType=mime_type, CacheControl=cache_control,Expires=expires)
+        
+        # replace the src of the image with the new uploaded location
+        image['src'] = http_scheme+'://s3.eu-central-1.amazonaws.com/'+bucket_name+'/'+image_name[-1]
 
     return soup
+
+
+if __name__ == '__main__':
+    html = "<html><body><h1>Some Example IoT stats so far&nbsp;</h1><p><img src='https://d3q75yzwz0mnvh.cloudfront.net/images/hero-78f5b28514.jpg'/></p></body></html>"
+    bucket_name = 'stekpad'
+    res = replace_image(html, bucket_name)
+    print(res)
