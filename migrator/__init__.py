@@ -16,16 +16,16 @@ import gevent
 import zipfile
 from hackpad_api.hackpad import Hackpad
 from image_uploader import replace_image
+from send_email import send_html_email, send_text_email
 from gevent import monkey
 monkey.patch_all()
 
 
-EMULATE_INSERTS_DELAY = 1 # real inserts when 0, otherwise delay per fake insert in seconds
+EMULATE_INSERTS_DELAY = 0 # real inserts when 0, otherwise delay per fake insert in seconds
 
 # TODO
 # create error, done, active queues
 # stop the whole thing on error
-# email confirmation to user
 
 
 def process_next_job():
@@ -34,17 +34,17 @@ def process_next_job():
     hackpad_rdb_port = os.environ.get('HACKPAD_REDIS_PORT') or '6379'
     hackpad_rdb_db = os.environ.get('HACKPAD_REDIS_DB') or 9
 
-    hackpad_max_concurrent_jobs = os.environ.get('HACKPAD_MAX_CONCURRENT_JOBS') or 4
+    hackpad_max_concurrent_jobs = os.environ.get('HACKPAD_MAX_CONCURRENT_JOBS') or 3
     active_jobs = 0
     
     rdb = redis.StrictRedis(host=hackpad_rdb_host, port=hackpad_rdb_port, db=hackpad_rdb_db)
 
     if EMULATE_INSERTS_DELAY > 0:
-        rdb.lpush('hackpad_imports', json.dumps({
-            'from': 'Job1 One <job1@example.com>',
-            'email_address': 'njob1@example.com',
-            'attachment': './attachment/sherlock.hackpad.com.zxpc7WkEDkm.WiONyRJ5cG.zip'
-        }))
+        # rdb.lpush('hackpad_imports', json.dumps({
+        #     'from': 'Job1 One <job1@example.com>',
+        #     'email_address': 'njob1@example.com',
+        #     'attachment': './attachment/sherlock.hackpad.com.zxpc7WkEDkm.WiONyRJ5cG.zip'
+        # }))
         rdb.lpush('hackpad_imports', json.dumps({
             'from': 'Job2 Two <job2@example.com>',
             'email_address': 'njob2@example.com',
@@ -246,11 +246,27 @@ def insert_pad_from_file(hackpad, fh, file_name, client_id, client_secret):
             print("Could not create pad %s" % file_name)
             return False
 
+
 def email_account(email, new_account, account_id, pads_created, pads_skipped):
     """  Email the account that the import was completed and (if new_account) 
     provide the login credentials.
     """
-    print(email, new_account, account_id, pads_created, pads_skipped)
+    msg = """Hi!
+
+We have migrated your hackpad.com pads to stekpad.com!
+
+Number of pads migrated: %s
+Number of pads skipped (no content): %s
+
+Please go to https://stekpad.com/ and login with your Google or Facebook account that uses the email address '%s'.
+
+If your Google or Facebook accounts have a different email adress, please create a free Stek.io account with the email address '%s'. Then log in with Stek.
+
+Cheers,
+The Stek Team
+    """ % (pads_created, pads_skipped, email, email)
+    send_text_email('hello@stek.io', email, 'hello@stek.io', 'Migration from hackpad.com completed', msg)    
+
 
 
 def unzip_attachment(zipped_attachment, target_dir):
