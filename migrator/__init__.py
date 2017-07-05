@@ -21,11 +21,10 @@ from gevent import monkey
 monkey.patch_all()
 
 
-EMULATE_INSERTS_DELAY = 0 # real inserts when 0, otherwise delay per fake insert in seconds
+EMULATE_INSERTS_DELAY = 0.1 # real inserts when 0, otherwise delay per fake insert in seconds
 
 # TODO
-# create error, done, active queues
-# stop the whole thing on error
+# remove stek specific email data
 
 
 def process_next_job():
@@ -35,7 +34,6 @@ def process_next_job():
     hackpad_rdb_db = os.environ.get('HACKPAD_REDIS_DB') or 9
 
     hackpad_max_concurrent_jobs = os.environ.get('HACKPAD_MAX_CONCURRENT_JOBS') or 3
-    active_jobs = 0
     
     rdb = redis.StrictRedis(host=hackpad_rdb_host, port=hackpad_rdb_port, db=hackpad_rdb_db)
 
@@ -65,15 +63,19 @@ def process_next_job():
 
     while True:
         job = rdb.brpop('hackpad_imports')
-        job = json.loads(job[1].decode('utf-8'))
+        job_obj = json.loads(job[1].decode('utf-8'))
+        m = re.search('^.+attachment/(.+)\.zip$', job_obj['attachment'])
+        job_id = m.group(1)
+        
+        # move job to temporary hash
+        rdb.hset('hackpad_processing', job_id, job[1])
+        
+        pool.spawn(import_pads, rdb, job_obj, job_id)
 
-        pool.spawn(import_pads, job)
 
 
-
-def import_pads(job):
+def import_pads(rdb, job, job_id):
     """ Import the pads for one account """
-
     # Open DB connection
     db = mysql_connect()
     
@@ -81,24 +83,36 @@ def import_pads(job):
     account_id = get_account_id(db, job['email_address'])
     new_account = False
     if not account_id:
-        account_id = create_new_account(db, job['email_address'], job['from'])
+        account_id = create_new_account(db, job_id, job['email_address'], job['from'])
         new_account = True
-
+        if not account_id:
+            return None # stop spawned job
+        
     # Get API token for account
-    client_secret = get_account_api_token(db, account_id)
+    client_secret = get_account_api_token(db, account_id, job_id)
+    if not client_secret:
+        return None # stop spawned job
 
     # Get the API client_id for account
-    client_id = get_client_id(account_id)
-        
+    client_id = get_client_id(account_id, job_id)
+    if not client_id:
+        return None # stop spawned job
+    
     # Create a new hackpad for each HTML file
-    pads_created, pads_skipped = create_pads_from_files(job['attachment'], job['email_address'], client_id, client_secret)
+    print("Starting job %s" % job_id)
+    pads_created, pads_skipped = create_pads_from_files(job_id, job['attachment'], job['email_address'], client_id, client_secret)
 
     # All is good: email the customer the job is done + credentials (in case it is a new account)
     if pads_created + pads_skipped:
         email_account(job['email_address'], new_account, account_id, pads_created, pads_skipped)
+        # move finished jobs to done queue
+        done_job = rdb.hget('hackpad_processing', job_id)
+        rdb.hdel('hackpad_processing', job_id)
+        rdb.hset('hackpad_done', job_id, done_job)
+    else:
+        email_error("No pads processed.", job_id)
 
-    return True
-    
+        
 def get_account_id(db, email, domain_id=1):
     """ Check if the current email is already a hackpad pro_accounts for the 
     specified domain_id and return the account_id
@@ -110,7 +124,7 @@ def get_account_id(db, email, domain_id=1):
     return None
 
 
-def create_new_account(db, email, the_from, domain_id=1):
+def create_new_account(db, job_id, email, the_from, domain_id=1):
     """ Create a new hackpad pro_accounts with this email for the specified domain_id """
     print('Creating new account...')
     try:
@@ -127,12 +141,12 @@ def create_new_account(db, email, the_from, domain_id=1):
         cursor.execute(query, query_args)
         db.commit()
     except mysql.connector.Error as err:
-        print("Failed inserting records to Hackpad: {}".format(err))
+        email_error("Failed inserting records to Hackpad: {}".format(err), job_id)
         
     return cursor.lastrowid
 
 
-def get_account_api_token(db, account_id, token_type=4):
+def get_account_api_token(db, account_id, job_id, token_type=4):
     """ Generate a hackpad API token and insert it in the pro_tokens table 
     (if it doesn't exist yet) and return it.
     """
@@ -157,12 +171,13 @@ def get_account_api_token(db, account_id, token_type=4):
         cursor.execute(query, query_args)
         db.commit()
     except mysql.connector.Error as err:
-        print("Failed inserting token to Hackpad: {}".format(err))
-
+        email_error("Failed inserting token to Hackpad: {}".format(err), job_id)
+        return False
+        
     return token
 
 
-def get_client_id(account_id):
+def get_client_id(account_id, job_id):
     """ Do a lookup to get the client_id for account with account_id """
     account_id_encryption_key = os.environ.get('HACKPAD_ACCOUNT_ID_KEY') or '0123456789abcdef' # default used for local testing
     client_ids_path = os.environ.get('HACKPAD_CLIENT_IDS_PATH') or './client_ids/' # default used for local testing
@@ -170,10 +185,11 @@ def get_client_id(account_id):
         id, client_id = line.split(' ')
         if str(account_id) == id:
             return client_id.strip()
-    return False # trigger error @@@@@@@@@@@@
+    email_error("Failed to get client_id for account {}".format(account_id), job_id)
+    return False
     
 
-def create_pads_from_files(attachment, email, client_id, client_secret):
+def create_pads_from_files(job_id, attachment, email, client_id, client_secret):
     """ For each HTML file in zipped attachment, create a new pad, return the number of
     created pads
     """
@@ -202,19 +218,19 @@ def create_pads_from_files(attachment, email, client_id, client_secret):
 
         print('importing for %s: %s' % (email, file_name))
         
-        if insert_pad_from_file(hackpad, fh, file_name, client_id, client_secret):
+        if insert_pad_from_file(job_id, hackpad, fh, file_name, client_id, client_secret):
             pads_created += 1
         else:
             pads_skipped += 1
         fh.close()
     # Check if all files are imported
     if pads_created + pads_skipped != len(files):
-        print('err')
-        # log an error and abort?
+        email_error("Not all files were processed", job_id)
+
     return pads_created, pads_skipped
 
 
-def insert_pad_from_file(hackpad, fh, file_name, client_id, client_secret):
+def insert_pad_from_file(job_id, hackpad, fh, file_name, client_id, client_secret):
     """ Check the file contents, and create a pad via the hackpad API """
     html_pad = fh.read().replace('\n', '')
     if html_pad == '<body><h1>Untitled</h1><p></p><p>This pad text is synchronized as you type, so that everyone viewing this page sees the same text.&nbsp; This allows you to collaborate seamlessly on documents!</p><p></p><p></p></body>':
@@ -242,8 +258,7 @@ def insert_pad_from_file(hackpad, fh, file_name, client_id, client_secret):
             print('Created pad: %s' % new_pad['globalPadId'])
             return True
         else:
-            # log an error and mention in summary email? @@@@@@@@@@@@@@
-            print("Could not create pad %s" % file_name)
+            email_error("Could not create pad %s" % file_name, job_id)
             return False
 
 
@@ -265,8 +280,7 @@ If your Google or Facebook accounts have a different email adress, please create
 Cheers,
 The Stek Team
     """ % (pads_created, pads_skipped, email, email)
-    send_text_email('hello@stek.io', email, 'hello@stek.io', 'Migration from hackpad.com completed', msg)    
-
+    send_text_email('hello@stek.io', email, 'Migration from hackpad.com completed', msg, bcc='hello@stek.io')
 
 
 def unzip_attachment(zipped_attachment, target_dir):
@@ -275,6 +289,11 @@ def unzip_attachment(zipped_attachment, target_dir):
     zip_ref.extractall(target_dir)
     zip_ref.close()
 
+
+def email_error(msg, job_id='unknown'):
+    send_text_email('hackpad@stek.io', 'errors@stek.io', '[Error] Hackpad migration error for job: %s' % job_id, msg)
+
+    
 def from_to_name(the_from, email):
     """" Convert the from field of the email sender to a full name if possible """
     # First remove email and spacing
@@ -324,7 +343,6 @@ def mysql_select_one(conn, query, query_args=None):
     row = cursor.fetchone()
     cursor.close()
     return row
-
 
 
 if __name__ == '__main__':

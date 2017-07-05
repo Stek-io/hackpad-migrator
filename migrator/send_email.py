@@ -8,14 +8,15 @@ smtp_port = os.environ.get('HACKPAD_SMPT_PORT') or 1025
 smtp_user = os.environ.get('HACKPAD_SMPT_USER') or ''
 smtp_password = os.environ.get('HACKPAD_SMPT_PASSWORD') or ''
 
-def send_html_email(me, you, bcc, subject, html, text):
+def send_html_email(me, you, subject, html, text, bcc=''):
 
     # Create message container - the correct MIME type is multipart/alternative.
     msg = MIMEMultipart('alternative')
     msg['Subject'] = subject
     msg['From'] = me
     msg['To'] = you
-    msg['Bcc'] = bcc
+    if bcc:
+        msg['Bcc'] = bcc
     
     # Record the MIME types of both parts - text/plain and text/html.
     part1 = MIMEText(text, 'plain')
@@ -40,13 +41,14 @@ def send_html_email(me, you, bcc, subject, html, text):
 
 
     
-def send_text_email(me, you, bcc, subject, text):
+def send_text_email(me, you, subject, text, bcc=''):
 
     msg = MIMEText(text)
     msg['Subject'] = subject
     msg['From'] = me
     msg['To'] = you
-    msg['Bcc'] = bcc
+    if bcc:
+        msg['Bcc'] = bcc
     
     # Send the message via our own SMTP server.
     s = smtplib.SMTP(smtp_host, smtp_port)
