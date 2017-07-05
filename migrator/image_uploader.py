@@ -18,6 +18,7 @@ def replace_image(html, bucket_name, http_scheme='https'):
     for image in soup.findAll('img'):
         image_src = image['src'].strip()
 
+        # if image was not uploaded to hackapad s3 ignore
         if not image_src.startswith('https://hackpad-attachments.s3.amazonaws.com/'):
             continue
         
@@ -51,11 +52,15 @@ def replace_image(html, bucket_name, http_scheme='https'):
                 img = Image.open(file, mode='r')
             except urllib.error.HTTPError as error:
                 print(error.read())
-                break
+                continue
+
+        # get the image extension
+        image_parts = image_src_parsed.path.split('.')
+        image_extension = image_parts[-1] =='jpg' and 'JPEG' or image_parts[-1]
 
         # stream file in binary mode
         imgByteArr = io.BytesIO()
-        img.save(imgByteArr, format='PNG')
+        img.save(imgByteArr, format=image_extension.upper())
         imgByteArr = imgByteArr.getvalue()
         
         # upload image to our bucket
