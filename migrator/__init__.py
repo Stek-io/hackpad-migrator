@@ -13,6 +13,7 @@ import magic
 import html
 import json
 import gevent
+from gevent.pool import Pool
 import zipfile
 from hackpad_api.hackpad import Hackpad
 from image_uploader import replace_image
@@ -21,7 +22,7 @@ from gevent import monkey
 monkey.patch_all()
 
 
-EMULATE_INSERTS_DELAY = 0.1 # real inserts when 0, otherwise delay per fake insert in seconds
+EMULATE_INSERTS_DELAY = 0 # real inserts when 0, otherwise delay per fake insert in seconds
 
 # TODO
 # remove stek specific email data
@@ -59,7 +60,9 @@ def process_next_job():
             'attachment': './attachment/hackpad.com.pxb3L0YOxil.neEUiOgdr2.zip'
         }))
 
-    pool = gevent.pool.Pool(hackpad_max_concurrent_jobs)
+    print(dir(gevent))
+        
+    pool = Pool(hackpad_max_concurrent_jobs)
 
     while True:
         job = rdb.brpop('hackpad_imports')
