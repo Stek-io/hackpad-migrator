@@ -324,7 +324,9 @@ def mysql_connect():
                                    user=hackpad_db_user,
                                    passwd=hackpad_db_pass,
                                    database=hackpad_db_name,
-                                   charset=hackpad_db_charset)
+                                   charset=hackpad_db_charset,
+                                   ssl_ca='%s/../config/ca_certs.pem' % os.path.dirname(os.path.abspath(__file__)))
+                                   
     return conn
 
 
