@@ -4,6 +4,5 @@ asyncio
 client_ids
 data
 ve
-*.jar
 .idea
 __pycache__
