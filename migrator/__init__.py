@@ -201,7 +201,8 @@ def create_pads_from_files(job_id, attachment, email, client_id, client_secret):
     unzip_attachment(attachment, directory)
     files = os.listdir(directory)
     
-    hackpad = Hackpad(api_domain = os.getenv('HACKPAD_API_DOMAIN') or 'hackpad.dev',
+    hackpad = Hackpad(api_scheme = os.getenv('HACKPAD_API_SCHEME') or 'http',
+                      api_domain = os.getenv('HACKPAD_API_DOMAIN') or 'hackpad.dev',
                       sub_domain = os.getenv('HACKPAD_SUB_DOMAIN') or '',
                       consumer_key = client_id,
                       consumer_secret = client_secret)
