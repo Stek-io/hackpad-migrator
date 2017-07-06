@@ -42,22 +42,22 @@ def process_next_job():
         # rdb.lpush('hackpad_imports', json.dumps({
         #     'from': 'Job1 One <job1@example.com>',
         #     'email_address': 'njob1@example.com',
-        #     'attachment': './attachment/sherlock.hackpad.com.zxpc7WkEDkm.WiONyRJ5cG.zip'
+        #     'attachment': './attachments/sherlock.hackpad.com.zxpc7WkEDkm.WiONyRJ5cG.zip'
         # }))
         rdb.lpush('hackpad_imports', json.dumps({
             'from': 'Job2 Two <job2@example.com>',
             'email_address': 'njob2@example.com',
-            'attachment': './attachment/handpicked.hackpad.com.tz4vKPzuePB.yN4qm8o9SH.zip'
+            'attachment': './attachments/handpicked.hackpad.com.tz4vKPzuePB.yN4qm8o9SH.zip'
         }))
         rdb.lpush('hackpad_imports', json.dumps({
             'from': 'Three, Job3 <job3@example.com>',
             'email_address': 'njob3@example.com',
-            'attachment': './attachment/hackpad.com.vEbKUwI4h4b.3nmKHa5CmC.zip'
+            'attachment': './attachments/hackpad.com.vEbKUwI4h4b.3nmKHa5CmC.zip'
         }))
         rdb.lpush('hackpad_imports', json.dumps({
             'from': 'Job4 <job4@example.com>',
             'email_address': 'njob4@example.com',
-            'attachment': './attachment/hackpad.com.pxb3L0YOxil.neEUiOgdr2.zip'
+            'attachment': './attachments/hackpad.com.pxb3L0YOxil.neEUiOgdr2.zip'
         }))
 
         
@@ -66,7 +66,7 @@ def process_next_job():
     while True:
         job = rdb.brpop('hackpad_imports')
         job_obj = json.loads(job[1].decode('utf-8'))
-        m = re.search('^.+attachment/(.+)\.zip$', job_obj['attachment'])
+        m = re.search('^.+attachments/(.+)\.zip$', job_obj['attachment'])
         job_id = m.group(1)
         
         # move job to temporary hash
@@ -196,7 +196,7 @@ def create_pads_from_files(job_id, attachment, email, client_id, client_secret):
     created pads
     """
     print("Opening attached zip %s." % attachment)
-    m = re.search('^.+attachment/(.+)\.zip$', attachment)
+    m = re.search('^.+attachments/(.+)\.zip$', attachment)
     directory = './data/' + m.group(1)
     unzip_attachment(attachment, directory)
     files = os.listdir(directory)
