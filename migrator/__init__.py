@@ -60,7 +60,6 @@ def process_next_job():
             'attachment': './attachment/hackpad.com.pxb3L0YOxil.neEUiOgdr2.zip'
         }))
 
-    print(dir(gevent))
         
     pool = Pool(hackpad_max_concurrent_jobs)
 
