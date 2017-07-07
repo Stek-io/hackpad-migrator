@@ -241,7 +241,7 @@ def insert_pad_from_file(job_id, hackpad, fh, file_name, client_id, client_secre
     html_pad = re.sub(r'^.*?<body', '<html><body', html_pad) # remove all stuff before first <body> tag
 
     # If file contains images, copy the images to our own S3 repo
-    html_pad = replace_image(html_pad, 'stekpad')
+    html_pad = replace_image(job_id, file_name, html_pad, 'stekpad')
     
     # get the title
     m = re.search('<h1.*?>(.+?)</h1>', html_pad)
@@ -328,8 +328,8 @@ def mysql_connect():
                                    user=hackpad_db_user,
                                    passwd=hackpad_db_pass,
                                    database=hackpad_db_name,
-                                   charset=hackpad_db_charset)
-                                   #ssl_ca='%s/../config/ca_certs.pem' % os.path.dirname(os.path.abspath(__file__)))
+                                   charset=hackpad_db_charset,
+                                   ssl_ca='%s/../config/ca_certs.pem' % os.path.dirname(os.path.abspath(__file__)))
                                    
     return conn
 
