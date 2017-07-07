@@ -14,8 +14,8 @@ import html
 import json
 import gevent
 from gevent.pool import Pool
+from logger import logging
 import zipfile
-import logging
 from hackpad_api.hackpad import Hackpad
 from image_uploader import replace_image
 from send_email import send_html_email, send_text_email
@@ -23,12 +23,10 @@ from gevent import monkey
 monkey.patch_all()
 
 
-EMULATE_INSERTS_DELAY = 0 # real inserts when 0, otherwise delay per fake insert in seconds
+EMULATE_INSERTS_DELAY = 0.1 # real inserts when 0, otherwise delay per fake insert in seconds
 
 # TODO
 # remove stek specific email data
-
-logging.basicConfig(filename='migrator.log',level=logging.DEBUG)
 
 def process_next_job():
     """ Read job from Redis, return location of files and email address """
@@ -330,8 +328,8 @@ def mysql_connect():
                                    user=hackpad_db_user,
                                    passwd=hackpad_db_pass,
                                    database=hackpad_db_name,
-                                   charset=hackpad_db_charset,
-                                   ssl_ca='%s/../config/ca_certs.pem' % os.path.dirname(os.path.abspath(__file__)))
+                                   charset=hackpad_db_charset)
+                                   #ssl_ca='%s/../config/ca_certs.pem' % os.path.dirname(os.path.abspath(__file__)))
                                    
     return conn
 
