@@ -15,6 +15,7 @@ import json
 import gevent
 from gevent.pool import Pool
 import zipfile
+import logging
 from hackpad_api.hackpad import Hackpad
 from image_uploader import replace_image
 from send_email import send_html_email, send_text_email
@@ -27,6 +28,7 @@ EMULATE_INSERTS_DELAY = 0 # real inserts when 0, otherwise delay per fake insert
 # TODO
 # remove stek specific email data
 
+logging.basicConfig(filename='migrator.log',level=logging.DEBUG)
 
 def process_next_job():
     """ Read job from Redis, return location of files and email address """
@@ -62,13 +64,13 @@ def process_next_job():
 
         
     pool = Pool(hackpad_max_concurrent_jobs)
-
+    
     while True:
         job = rdb.brpop('hackpad_imports')
         job_obj = json.loads(job[1].decode('utf-8'))
         m = re.search('^.+attachments/(.+)\.zip$', job_obj['attachment'])
         job_id = m.group(1)
-        
+
         # move job to temporary hash
         rdb.hset('hackpad_processing', job_id, job[1])
         
@@ -101,7 +103,7 @@ def import_pads(rdb, job, job_id):
         return None # stop spawned job
     
     # Create a new hackpad for each HTML file
-    print("Starting job %s" % job_id)
+    logging.debug("Starting job %s" % job_id)
     pads_created, pads_skipped = create_pads_from_files(job_id, job['attachment'], job['email_address'], client_id, client_secret)
 
     # All is good: email the customer the job is done + credentials (in case it is a new account)
@@ -128,7 +130,7 @@ def get_account_id(db, email, domain_id=1):
 
 def create_new_account(db, job_id, email, the_from, domain_id=1):
     """ Create a new hackpad pro_accounts with this email for the specified domain_id """
-    print('Creating new account...')
+    logging.debug('Creating new account...')
     try:
         cursor = db.cursor()
 
@@ -159,7 +161,7 @@ def get_account_api_token(db, account_id, job_id, token_type=4):
             return r['token'].decode()        
         return r['token']
     
-    print('Creating new token...')
+    logging.debug('Creating new token...')
     try:
         cursor = db.cursor()
 
@@ -195,7 +197,7 @@ def create_pads_from_files(job_id, attachment, email, client_id, client_secret):
     """ For each HTML file in zipped attachment, create a new pad, return the number of
     created pads
     """
-    print("Opening attached zip %s." % attachment)
+    logging.debug("Opening attached zip %s." % attachment)
     m = re.search('^.+attachments/(.+)\.zip$', attachment)
     directory = './data/' + m.group(1)
     unzip_attachment(attachment, directory)
@@ -214,12 +216,12 @@ def create_pads_from_files(job_id, attachment, email, client_id, client_secret):
         # check if it is really an html file
         file_type = magic.from_file(file_path, mime=True)
         if file_type != 'text/html':
-            print('Invalid file type for file %s :%s' % (file_path, file_type))
+            logging.debug('Invalid file type for file %s :%s' % (file_path, file_type))
             continue 
         
         fh = open(file_path)
 
-        print('importing for %s: %s' % (email, file_name))
+        logging.debug('importing for %s: %s' % (email, file_name))
         
         if insert_pad_from_file(job_id, hackpad, fh, file_name, client_id, client_secret):
             pads_created += 1
@@ -253,12 +255,12 @@ def insert_pad_from_file(job_id, hackpad, fh, file_name, client_id, client_secre
         title = file_name.replace('-', ' ').rstrip('.html').strip()
 
     if EMULATE_INSERTS_DELAY:
-        print('Fake create, sleeping for %s seconds...' % EMULATE_INSERTS_DELAY)
+        logging.debug('Fake create, sleeping for %s seconds...' % EMULATE_INSERTS_DELAY)
         time.sleep(EMULATE_INSERTS_DELAY)
     else: # real insert
         new_pad = hackpad.create_hackpad(title, html_pad, '', 'text/html')
         if new_pad and 'globalPadId' in new_pad:
-            print('Created pad: %s' % new_pad['globalPadId'])
+            logging.debug('Created pad: %s' % new_pad['globalPadId'])
             return True
         else:
             email_error("Could not create pad %s" % file_name, job_id)
@@ -294,6 +296,7 @@ def unzip_attachment(zipped_attachment, target_dir):
 
 
 def email_error(msg, job_id='unknown'):
+    logging.error('Error for job %s: %s' % (job_id, msg))
     send_text_email('hackpad@stek.io', 'errors@stek.io', '[Error] Hackpad migration error for job: %s' % job_id, msg)
 
     
