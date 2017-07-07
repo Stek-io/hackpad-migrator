@@ -23,7 +23,7 @@ from gevent import monkey
 monkey.patch_all()
 
 
-EMULATE_INSERTS_DELAY = 0.1 # real inserts when 0, otherwise delay per fake insert in seconds
+EMULATE_INSERTS_DELAY = 0 # real inserts when 0, otherwise delay per fake insert in seconds
 
 # TODO
 # remove stek specific email data
