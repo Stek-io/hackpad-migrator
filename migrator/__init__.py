@@ -38,12 +38,12 @@ def process_next_job():
     
     rdb = redis.StrictRedis(host=hackpad_rdb_host, port=hackpad_rdb_port, db=hackpad_rdb_db)
 
-    if EMULATE_INSERTS_DELAY > 0:
-        # rdb.lpush('hackpad_imports', json.dumps({
-        #     'from': 'Job1 One <job1@example.com>',
-        #     'email_address': 'njob1@example.com',
-        #     'attachment': './attachments/sherlock.hackpad.com.zxpc7WkEDkm.WiONyRJ5cG.zip'
-        # }))
+    if EMULATE_INSERTS_DELAY > 0:        
+        rdb.lpush('hackpad_imports', json.dumps({
+            'from': 'Job1 One <job1@example.com>',
+            'email_address': 'mark-local@pors.net',
+            'attachment': './attachments/sherlock.hackpad.com.zxpc7WkEDkm.WiONyRJ5cG.zip'
+        }))
         rdb.lpush('hackpad_imports', json.dumps({
             'from': 'Job2 Two <job2@example.com>',
             'email_address': 'njob2@example.com',
@@ -59,10 +59,9 @@ def process_next_job():
             'email_address': 'njob4@example.com',
             'attachment': './attachments/hackpad.com.pxb3L0YOxil.neEUiOgdr2.zip'
         }))
-
         
     pool = Pool(hackpad_max_concurrent_jobs)
-    
+
     while True:
         job = rdb.brpop('hackpad_imports')
         job_obj = json.loads(job[1].decode('utf-8'))
@@ -101,7 +100,7 @@ def import_pads(rdb, job, job_id):
         return None # stop spawned job
     
     # Create a new hackpad for each HTML file
-    logging.debug("Starting job %s" % job_id)
+    logging.info("Starting job %s" % job_id)
     pads_created, pads_skipped = create_pads_from_files(job_id, job['attachment'], job['email_address'], client_id, client_secret)
 
     # All is good: email the customer the job is done + credentials (in case it is a new account)
@@ -113,8 +112,9 @@ def import_pads(rdb, job, job_id):
         rdb.hset('hackpad_done', job_id, done_job)
     else:
         email_error("No pads processed.", job_id)
+    logging.info("Finished job %s" % job_id)
 
-        
+    
 def get_account_id(db, email, domain_id=1):
     """ Check if the current email is already a hackpad pro_accounts for the 
     specified domain_id and return the account_id
@@ -128,7 +128,7 @@ def get_account_id(db, email, domain_id=1):
 
 def create_new_account(db, job_id, email, the_from, domain_id=1):
     """ Create a new hackpad pro_accounts with this email for the specified domain_id """
-    logging.debug('Creating new account...')
+    logging.info('Creating new account...')
     try:
         cursor = db.cursor()
 
@@ -159,7 +159,7 @@ def get_account_api_token(db, account_id, job_id, token_type=4):
             return r['token'].decode()        
         return r['token']
     
-    logging.debug('Creating new token...')
+    logging.info('Creating new token...')
     try:
         cursor = db.cursor()
 
@@ -195,7 +195,7 @@ def create_pads_from_files(job_id, attachment, email, client_id, client_secret):
     """ For each HTML file in zipped attachment, create a new pad, return the number of
     created pads
     """
-    logging.debug("Opening attached zip %s." % attachment)
+    logging.info("Opening attached zip %s." % attachment)
     m = re.search('^.+attachments/(.+)\.zip$', attachment)
     directory = './data/' + m.group(1)
     unzip_attachment(attachment, directory)
@@ -214,12 +214,12 @@ def create_pads_from_files(job_id, attachment, email, client_id, client_secret):
         # check if it is really an html file
         file_type = magic.from_file(file_path, mime=True)
         if file_type != 'text/html':
-            logging.debug('Invalid file type for file %s :%s' % (file_path, file_type))
+            logging.info('Invalid file type for file %s :%s' % (file_path, file_type))
             continue 
         
         fh = open(file_path)
 
-        logging.debug('importing for %s: %s' % (email, file_name))
+        logging.info('importing for %s: %s' % (email, file_name))
         
         if insert_pad_from_file(job_id, hackpad, fh, file_name, client_id, client_secret):
             pads_created += 1
@@ -240,8 +240,15 @@ def insert_pad_from_file(job_id, hackpad, fh, file_name, client_id, client_secre
         return False # default pad
     html_pad = re.sub(r'^.*?<body', '<html><body', html_pad) # remove all stuff before first <body> tag
 
+    # Fix html export file bug
+    html_pad = fix_invalid_a_tag(html_pad)
+
+    # Images won't show-up if they don't have some class/properties
+    html_pad = fix_img_tag(html_pad)
+    
     # If file contains images, copy the images to our own S3 repo
-    html_pad = replace_image(job_id, file_name, html_pad, 'stekpad')
+    if 'https://hackpad-attachments.s3.amazonaws.com/' in html_pad:
+        html_pad = replace_image(job_id, file_name, html_pad, 'stekpad-prod')
     
     # get the title
     m = re.search('<h1.*?>(.+?)</h1>', html_pad)
@@ -251,14 +258,14 @@ def insert_pad_from_file(job_id, hackpad, fh, file_name, client_id, client_secre
     else:
         # use the filename as the title
         title = file_name.replace('-', ' ').rstrip('.html').strip()
-
+        
     if EMULATE_INSERTS_DELAY:
-        logging.debug('Fake create, sleeping for %s seconds...' % EMULATE_INSERTS_DELAY)
+        logging.info('Fake create, sleeping for %s seconds...' % EMULATE_INSERTS_DELAY)
         time.sleep(EMULATE_INSERTS_DELAY)
     else: # real insert
         new_pad = hackpad.create_hackpad(title, html_pad, '', 'text/html')
         if new_pad and 'globalPadId' in new_pad:
-            logging.debug('Created pad: %s' % new_pad['globalPadId'])
+            logging.info('Created pad: %s' % new_pad['globalPadId'])
             return True
         else:
             email_error("Could not create pad %s" % file_name, job_id)
@@ -284,6 +291,20 @@ Cheers,
 The Stek Team
     """ % (pads_created, pads_skipped, email, email)
     send_text_email('hello@stek.io', email, 'Migration from hackpad.com completed', msg, bcc='hello@stek.io')
+
+
+def fix_invalid_a_tag(html_pad):
+    tags = re.findall('<a([^>]+)/>', html_pad)
+    for tag in tags:
+        html_pad = html_pad.replace('<a'+tag+'/>', '<a'+tag+'>')
+    return html_pad
+
+
+def fix_img_tag(html_pad):
+    tags = re.findall('<img ([^>]+)>', html_pad)
+    for tag in tags:
+        html_pad = html_pad.replace('<img '+tag+'>', '<img class="inline-img" faketext="*" contenteditable="false"'+tag+'>')
+    return html_pad
 
 
 def unzip_attachment(zipped_attachment, target_dir):
@@ -322,14 +343,18 @@ def mysql_connect():
     hackpad_db_pass = os.environ.get('HACKPAD_MYSQL_PASSWD') or ''
     hackpad_db_name = os.environ.get('HACKPAD_MYSQL_DB') or 'hackpad_dev'
     hackpad_db_charset = os.environ.get('HACKPAD_MYSQL_ENCODING') or 'utf8'
-
-    conn = mysql.connector.connect(host=hackpad_db_host,
-                                   port=hackpad_db_port,
-                                   user=hackpad_db_user,
-                                   passwd=hackpad_db_pass,
-                                   database=hackpad_db_name,
-                                   charset=hackpad_db_charset,
-                                   ssl_ca='%s/../config/ca_certs.pem' % os.path.dirname(os.path.abspath(__file__)))
+    hackpad_db_ssl = '%s/../config/ca_certs.pem' % os.path.dirname(os.path.abspath(__file__)) if not os.environ.get('HACKPAD_MYSQL_NO_SSL') else None
+    
+    kwargs = { 'host': hackpad_db_host,
+               'port': hackpad_db_port,
+               'user': hackpad_db_user,
+               'passwd': hackpad_db_pass,
+               'database': hackpad_db_name,
+               'charset': hackpad_db_charset }
+    if hackpad_db_ssl:
+        kwargs['ssl_ca'] = hackpad_db_ssl        
+    
+    conn = mysql.connector.connect(**kwargs)
                                    
     return conn
 
