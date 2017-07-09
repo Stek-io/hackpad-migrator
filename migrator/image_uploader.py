@@ -46,8 +46,7 @@ def replace_image(job_id, file_name, html_string, bucket_name, bucket_folder='co
 
             # read image url
             image_src_parsed = urllib.parse.urlparse(image_src)
-            image_name_encoded = urllib.parse.quote(image_src_parsed.path)
-
+            image_name_encoded = urllib.parse.quote(image_src_parsed.path)            
             file = io.BytesIO(urllib.request.urlopen(urllib.parse.urljoin(image_src, image_name_encoded)).read())
             img = Image.open(file, mode='r')
         except urllib.error.HTTPError as error:
@@ -59,6 +58,10 @@ def replace_image(job_id, file_name, html_string, bucket_name, bucket_folder='co
             except urllib.error.HTTPError as error:
                 logging.error("[IMG] %s", error.read())
                 continue
+            except UnicodeEncodeError:
+                logging.error("[IMG] UnicodeEncodeError for image %s", image_src)
+                continue
+                
 
         # get the image extension
         image_parts = image_src_parsed.path.split('.')

@@ -59,8 +59,8 @@ def process_next_job():
             'email_address': 'njob4@example.com',
             'attachment': './attachments/hackpad.com.pxb3L0YOxil.neEUiOgdr2.zip'
         }))
-        
-    pool = Pool(hackpad_max_concurrent_jobs)
+
+    pool = Pool(int(hackpad_max_concurrent_jobs))
 
     while True:
         job = rdb.brpop('hackpad_imports')
